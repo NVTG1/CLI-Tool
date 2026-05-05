@@ -14,6 +14,7 @@ An AI-powered CLI agent that clones websites by generating fully working HTML/CS
 ## 🚀 Demo
 
 > 📹 [YouTube Demo Video](#) — *(https://youtu.be/Mq79ejD7eVk)*  Watch at 2X speed
+---
 > 💻 [GitHub Repository](#) — *(https://github.com/NVTG1/CLI-Tool)*
 
 ---
