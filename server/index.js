@@ -63,7 +63,6 @@ async function fetchWebsite(url = "") {
 
     let html = await res.text();
 
-    // Strip scripts, SVGs, base64 blobs — pure token waste
     html = html
       .replace(/<script[\s\S]*?<\/script>/gi, "")
       .replace(/<svg[\s\S]*?<\/svg>/gi, "<!-- svg removed -->")
@@ -71,7 +70,6 @@ async function fetchWebsite(url = "") {
       .replace(/<!--[\s\S]*?-->/g, "")
       .replace(/\s{2,}/g, " ");
 
-    // Keep a tight slice so the whole conversation stays under Groq's TPM limit
     const MAX_CHARS = 4000;
     if (html.length > MAX_CHARS) {
       html = html.slice(0, MAX_CHARS) + "\n<!-- TRUNCATED -->";
@@ -246,7 +244,7 @@ async function runAgent(url) {
   const siteName = getSiteName(url);
   const outputPath = `${siteName}_clone/index.html`;
 
-  const client = new Groq(); // reads GROQ_API_KEY from .env automatically
+  const client = new Groq(); 
 
   const messages = [
     { role: "system", content: buildSystemPrompt(url, siteName) },
@@ -274,7 +272,6 @@ async function runAgent(url) {
     iterations++;
 
     let response;
-    // Retry loop: handles rate limits, connection errors, and transient failures
     let retryCount = 0;
     const MAX_RETRIES = 5;
     while (true) {
@@ -285,7 +282,7 @@ async function runAgent(url) {
           temperature: 0,
           messages,
         });
-        break; // success — exit retry loop
+        break; 
       } catch (err) {
         const isRateLimit = err.status === 429;
         const isServerError = err.status >= 500;
@@ -305,7 +302,7 @@ async function runAgent(url) {
             waitSec = parseInt(err.headers?.["retry-after"] ?? "60", 10);
             log("RATE LIMIT", c.yellow, `TPM limit hit. Waiting ${waitSec}s (attempt ${retryCount}/${MAX_RETRIES})...`);
           } else if (isConnectionError) {
-            waitSec = Math.min(4 ** retryCount, 60); // exponential: 4s, 16s, 60s...
+            waitSec = Math.min(4 ** retryCount, 60);
             log("CONNECTION ERROR", c.yellow, `${err.message}. Retrying in ${waitSec}s (attempt ${retryCount}/${MAX_RETRIES})...`);
           } else {
             waitSec = Math.min(2 ** retryCount * 5, 60);
@@ -314,7 +311,7 @@ async function runAgent(url) {
           await new Promise((r) => setTimeout(r, waitSec * 1000));
           continue;
         }
-        throw err; // non-retryable or out of retries
+        throw err;
       }
     }
 
@@ -415,7 +412,6 @@ async function runAgent(url) {
             try {
               args = JSON.parse(args);
             } catch {
-              /* keep as plain string */
             }
           }
 
@@ -455,7 +451,6 @@ async function runAgent(url) {
               ? result.slice(0, 300) + "…"
               : result;
           log("OBSERVE", c.green, String(preview));
-          // Truncate what enters message history to stay under Groq TPM limit
           const MAX_HISTORY = 3000;
           observeContent =
             typeof result === "string" && result.length > MAX_HISTORY

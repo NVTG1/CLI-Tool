@@ -13,7 +13,7 @@ An AI-powered CLI agent that clones websites by generating fully working HTML/CS
 
 ## 🚀 Demo
 
-> 📹 [YouTube Demo Video](#) — *(https://youtu.be/Mq79ejD7eVk)*  
+> 📹 [YouTube Demo Video](#) — *(https://youtu.be/Mq79ejD7eVk)*  Watch at 2X speed
 > 💻 [GitHub Repository](#) — *(https://github.com/NVTG1/CLI-Tool)*
 
 ---
@@ -24,7 +24,6 @@ An AI-powered CLI agent that clones websites by generating fully working HTML/CS
 - 🌐 **Live website fetching** — scrapes real colors, fonts, nav labels, and hero copy from the target URL
 - 🎨 **Faithful clone** — responsive HTML/CSS/JS that mirrors the real site's palette and layout
 - 📱 **Fully responsive** — works on mobile (320px), tablet (768px), and desktop (1280px+)
-- 🔗 **Safe links** — all clicks stay on the clone; no redirects to the real site
 - 🔁 **Auto-retry** — handles Groq rate limits, connection errors, and server failures with exponential backoff
 - 💬 **Interactive CLI** — accepts any URL, loops until you type `exit`
 
@@ -46,7 +45,7 @@ An AI-powered CLI agent that clones websites by generating fully working HTML/CS
 ## 📁 Project Structure
 
 ```
-.
+server
 ├── index.js          # Main agent — all tools, loop, and CLI
 ├── .env              # API keys (never commit this)
 ├── .env.example      # Template for environment variables
