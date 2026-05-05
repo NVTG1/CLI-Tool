@@ -63,9 +63,16 @@ async function fetchWebsite(url = "") {
 
     let html = await res.text();
 
-    // Truncate to avoid blowing the LLM context window
-    // but keep enough for colors, fonts, nav structure, hero copy
-    const MAX_CHARS = 15000;
+    // Strip scripts, SVGs, base64 blobs — pure token waste
+    html = html
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<svg[\s\S]*?<\/svg>/gi, "<!-- svg removed -->")
+      .replace(/data:[a-z]+\/[a-z+;]+;base64,[^"']*/gi, "data:REMOVED")
+      .replace(/<!--[\s\S]*?-->/g, "")
+      .replace(/\s{2,}/g, " ");
+
+    // Keep a tight slice so the whole conversation stays under Groq's TPM limit
+    const MAX_CHARS = 4000;
     if (html.length > MAX_CHARS) {
       html = html.slice(0, MAX_CHARS) + "\n<!-- TRUNCATED -->";
     }
@@ -144,8 +151,21 @@ Generate a fully working single-page HTML clone with HTML, CSS, and JavaScript t
 STRICT DESIGN RULES:
   1. Match the real site's color palette, fonts, and layout as closely as possible.
   2. Use realistic copy — real product name, real taglines, real nav items (Courses, Mentorship, Pricing, Blog, Login).
-  3. Every nav link and CTA MUST have a real href, e.g.:
-       <a href="${url}/courses" target="_blank">Courses</a>
+  3. ⚠️ CRITICAL LINK RULE: Every nav link, CTA button, and footer link MUST use href="#" only.
+     NEVER link to the real website. Instead, use onclick to show an in-page placeholder:
+       <a href="#" onclick="showPage('Courses'); return false;">Courses</a>
+     In your <script> block, include this function:
+       function showPage(name) {
+         document.body.innerHTML = [
+           '<div style="display:flex;align-items:center;justify-content:center;',
+           'height:100vh;font-family:sans-serif;flex-direction:column;gap:20px;background:#f9f9f9">',
+           '<h1 style="font-size:2.5rem;margin:0">' + name + '</h1>',
+           '<p style="color:#888;font-size:1.1rem">This is a UI clone demo. This page is not available.</p>',
+           '<button onclick="location.reload()" style="padding:12px 28px;background:#333;color:#fff;',
+           'border:none;border-radius:8px;font-size:1rem;cursor:pointer">← Go Back</button>',
+           '</div>'
+         ].join('');
+       }
   4. FULLY RESPONSIVE — must work on mobile (320px), tablet (768px), desktop (1280px+).
   5. Include a hamburger menu for mobile that toggles the nav.
   6. Use CSS media queries and CSS variables for the color palette.
@@ -254,26 +274,48 @@ async function runAgent(url) {
     iterations++;
 
     let response;
-    try {
-      response = await client.chat.completions.create({
-        model: "llama-3.3-70b-versatile",
-        max_tokens: 8192,
-        temperature: 0,
-        messages,
-      });
-    } catch (err) {
-      // Handle rate limit gracefully
-      if (err.status === 429) {
-        const retryAfter = err.headers?.["retry-after"] ?? 60;
-        log(
-          "RATE LIMIT",
-          c.yellow,
-          `Token limit hit. Waiting ${retryAfter}s then retrying...`,
-        );
-        await new Promise((r) => setTimeout(r, retryAfter * 1000));
-        continue;
+    // Retry loop: handles rate limits, connection errors, and transient failures
+    let retryCount = 0;
+    const MAX_RETRIES = 5;
+    while (true) {
+      try {
+        response = await client.chat.completions.create({
+          model: "llama-3.3-70b-versatile",
+          max_tokens: 8192,
+          temperature: 0,
+          messages,
+        });
+        break; // success — exit retry loop
+      } catch (err) {
+        const isRateLimit = err.status === 429;
+        const isServerError = err.status >= 500;
+        const isConnectionError =
+          !err.status &&
+          (err.code === "ECONNRESET" ||
+            err.code === "ENOTFOUND" ||
+            err.code === "ETIMEDOUT" ||
+            err.message?.toLowerCase().includes("connection") ||
+            err.message?.toLowerCase().includes("network") ||
+            err.message?.toLowerCase().includes("fetch"));
+
+        if ((isRateLimit || isServerError || isConnectionError) && retryCount < MAX_RETRIES) {
+          retryCount++;
+          let waitSec;
+          if (isRateLimit) {
+            waitSec = parseInt(err.headers?.["retry-after"] ?? "60", 10);
+            log("RATE LIMIT", c.yellow, `TPM limit hit. Waiting ${waitSec}s (attempt ${retryCount}/${MAX_RETRIES})...`);
+          } else if (isConnectionError) {
+            waitSec = Math.min(4 ** retryCount, 60); // exponential: 4s, 16s, 60s...
+            log("CONNECTION ERROR", c.yellow, `${err.message}. Retrying in ${waitSec}s (attempt ${retryCount}/${MAX_RETRIES})...`);
+          } else {
+            waitSec = Math.min(2 ** retryCount * 5, 60);
+            log("SERVER ERROR", c.yellow, `HTTP ${err.status}. Retrying in ${waitSec}s (attempt ${retryCount}/${MAX_RETRIES})...`);
+          }
+          await new Promise((r) => setTimeout(r, waitSec * 1000));
+          continue;
+        }
+        throw err; // non-retryable or out of retries
       }
-      throw err;
     }
 
     const rawContent = response.choices[0].message.content;
@@ -310,7 +352,6 @@ async function runAgent(url) {
       continue;
     }
 
-    // Debug log for TOOL steps
     if (parsed.step === "TOOL") {
       console.log(
         `${c.gray}[DEBUG] tool: ${parsed.tool_name} | args type: ${typeof parsed.tool_args}${c.reset}`,
@@ -369,7 +410,6 @@ async function runAgent(url) {
         log("OBSERVE", c.red, observeContent);
       } else {
         try {
-          // Normalize tool_args — handle both plain string and JSON-encoded string
           let args = parsed.tool_args;
           if (typeof args === "string") {
             try {
@@ -401,7 +441,6 @@ async function runAgent(url) {
             );
           }
 
-          // Track successful writeFile
           if (
             parsed.tool_name === "writeFile" &&
             typeof result === "string" &&
@@ -416,7 +455,12 @@ async function runAgent(url) {
               ? result.slice(0, 300) + "…"
               : result;
           log("OBSERVE", c.green, String(preview));
-          observeContent = result;
+          // Truncate what enters message history to stay under Groq TPM limit
+          const MAX_HISTORY = 3000;
+          observeContent =
+            typeof result === "string" && result.length > MAX_HISTORY
+              ? result.slice(0, MAX_HISTORY) + "... [TRUNCATED FOR TOKEN LIMIT]"
+              : result;
         } catch (err) {
           observeContent = `Tool error: ${err.message}`;
           log("OBSERVE", c.red, observeContent);
@@ -432,7 +476,6 @@ async function runAgent(url) {
     } else if (parsed.step === "OUTPUT") {
       if (!siteWasFetched) {
         log("BLOCKED OUTPUT", c.red, "Site was never fetched.");
-
         messages.push({
           role: "user",
           content: JSON.stringify({
@@ -440,10 +483,9 @@ async function runAgent(url) {
             content: `ERROR: You must call fetchWebsite("${url}") before OUTPUT to get the real colors and copy. Do it NOW.`,
           }),
         });
-
         continue;
       }
-      // Guardrail: block OUTPUT if file was never written
+
       if (!fileWasWritten) {
         log(
           "BLOCKED OUTPUT",
